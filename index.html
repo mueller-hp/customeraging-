@@ -549,6 +549,8 @@
         const App = () => {
             const [current_page, set_current_page] = useState('database');
             const [customer_data, set_customer_data] = useState([]);
+            const [sort_column, set_sort_column] = useState('חשבון');
+            const [sort_direction, set_sort_direction] = useState('asc');
 
             // Load data from localStorage on component mount
             useEffect(() => {
@@ -566,6 +568,35 @@
             // Calculate KPIs
             const kpis = useMemo(() => calculate_kpis(customer_data), [customer_data]);
             const top_debtors = useMemo(() => get_top_debtors(customer_data), [customer_data]);
+            
+            // Sort customer data
+            const sorted_customer_data = useMemo(() => {
+                if (!customer_data || customer_data.length === 0) return [];
+                
+                const sorted = [...customer_data].sort((a, b) => {
+                    let aValue = a[sort_column];
+                    let bValue = b[sort_column];
+                    
+                    // Handle numeric columns
+                    const numeric_columns = ['סה\'כ', 'חוב עתידי', '>90', '61-90', '31-60', '1-30'];
+                    if (numeric_columns.includes(sort_column)) {
+                        aValue = parseNumber(aValue);
+                        bValue = parseNumber(bValue);
+                    }
+                    
+                    // Handle string comparison for Hebrew text
+                    if (typeof aValue === 'string' && typeof bValue === 'string') {
+                        aValue = aValue.toString().toLowerCase();
+                        bValue = bValue.toString().toLowerCase();
+                    }
+                    
+                    if (aValue < bValue) return sort_direction === 'asc' ? -1 : 1;
+                    if (aValue > bValue) return sort_direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+                
+                return sorted;
+            }, [customer_data, sort_column, sort_direction]);
 
             const handle_file_upload = (data) => {
                 set_customer_data(data);
@@ -585,7 +616,34 @@
                                     
                                     {customer_data.length > 0 && (
                                         <div className="mt-8">
-                                            <h3 className="text-lg font-medium text-gray-900 mb-4">תצוגה מקדימה של הנתונים</h3>
+                                            <div className="flex justify-between items-center mb-4">
+                                                <h3 className="text-lg font-medium text-gray-900">כל הנתונים ({customer_data.length} רשומות)</h3>
+                                                <div className="flex gap-4 items-center">
+                                                    <div className="flex items-center gap-2">
+                                                        <label className="text-sm font-medium text-gray-700">מיון לפי:</label>
+                                                        <select 
+                                                            value={sort_column} 
+                                                            onChange={(e) => set_sort_column(e.target.value)}
+                                                            className="border border-gray-300 rounded-md px-3 py-1 text-sm"
+                                                        >
+                                                            <option value="חשבון">חשבון</option>
+                                                            <option value="תאור חשבון">תאור חשבון</option>
+                                                            <option value="סה'כ">סה"כ</option>
+                                                            <option value="חוב עתידי">חוב עתידי</option>
+                                                            <option value=">90">>90</option>
+                                                            <option value="61-90">61-90</option>
+                                                            <option value="31-60">31-60</option>
+                                                            <option value="1-30">1-30</option>
+                                                        </select>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => set_sort_direction(sort_direction === 'asc' ? 'desc' : 'asc')}
+                                                        className="flex items-center gap-1 px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
+                                                    >
+                                                        {sort_direction === 'asc' ? '↑ עולה' : '↓ יורד'}
+                                                    </button>
+                                                </div>
+                                            </div>
                                             <div className="bg-white shadow overflow-hidden sm:rounded-md">
                                                 <div className="overflow-x-auto">
                                                     <table className="min-w-full divide-y divide-gray-200">
@@ -602,7 +660,7 @@
                                                             </tr>
                                                         </thead>
                                                         <tbody className="bg-white divide-y divide-gray-200">
-                                                            {customer_data.slice(0, 10).map((item, index) => (
+                                                            {sorted_customer_data.map((item, index) => (
                                                                 <tr key={index}>
                                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{item.חשבון}</td>
                                                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{item['תאור חשבון']}</td>
@@ -617,11 +675,6 @@
                                                         </tbody>
                                                     </table>
                                                 </div>
-                                                {customer_data.length > 10 && (
-                                                    <div className="bg-gray-50 px-6 py-3 text-sm text-gray-500">
-                                                        מציג 10 מתוך {customer_data.length} רשומות
-                                                    </div>
-                                                )}
                                             </div>
                                         </div>
                                     )}
