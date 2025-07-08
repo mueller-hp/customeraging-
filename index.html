@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>לוח בקרה דוחות גיל חוב</title>
+    
+    <!-- Google Fonts for Hebrew -->
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- React -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide React Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            direction: rtl;
+        }
+        
+        .rtl-grid {
+            direction: ltr;
+        }
+        
+        .rtl-content {
+            direction: rtl;
+        }
+        
+        /* Custom RTL styles */
+        .chart-container {
+            direction: ltr;
+        }
+        
+        .number-display {
+            direction: ltr;
+            text-align: right;
+        }
+        
+        .upload-area {
+            border: 2px dashed #cbd5e1;
+            border-radius: 8px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .upload-area:hover {
+            border-color: #3b82f6;
+        }
+        
+        .upload-area.dragover {
+            border-color: #3b82f6;
+            background-color: #f8fafc;
+        }
+        
+        .kpi-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .kpi-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .kpi-card.overdue {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        .kpi-card.current {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+        
+        .kpi-card.future {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+    </style>
+    
+    <script>
+        // Configure Tailwind for RTL
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'hebrew': ['Heebo', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50 font-hebrew">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Helper functions
+        const formatNumber = (num) => {
+            if (num === null || num === undefined) return '0';
+            const number = typeof num === 'string' ? parseInt(num) || 0 : num;
+            return new Intl.NumberFormat('he-IL').format(number);
+        };
+
+        const parseNumber = (str) => {
+            if (str === null || str === undefined || str === '') return 0;
+            return parseInt(str.toString().replace(/[^\d-]/g, '')) || 0;
+        };
+
+        // Data processing functions
+        const calculate_kpis = (data) => {
+            if (!data || data.length === 0) return {
+                total_debt: 0,
+                future_debt: 0,
+                overdue_debt: 0,
+                average_aging_days: 0,
+                customer_count: 0,
+                debt_1_30: 0,
+                debt_31_60: 0,
+                debt_61_90: 0
+            };
+
+            const total_debt = data.reduce((sum, item) => sum + parseNumber(item['סה\'כ']), 0);
+            const future_debt = data.reduce((sum, item) => sum + parseNumber(item['חוב עתידי']), 0);
+            const overdue_debt = data.reduce((sum, item) => sum + parseNumber(item['>90']), 0);
+            const debt_1_30 = data.reduce((sum, item) => sum + parseNumber(item['1-30']), 0);
+            const debt_31_60 = data.reduce((sum, item) => sum + parseNumber(item['31-60']), 0);
+            const debt_61_90 = data.reduce((sum, item) => sum + parseNumber(item['61-90']), 0);
+            
+            const customer_count = data.filter(item => parseNumber(item['סה\'כ']) > 0).length;
+            
+            // Calculate average aging days (weighted by debt amount)
+            let total_weighted_days = 0;
+            let total_debt_for_avg = 0;
+            
+            data.forEach(item => {
+                const debt_1_30_val = parseNumber(item['1-30']);
+                const debt_31_60_val = parseNumber(item['31-60']);
+                const debt_61_90_val = parseNumber(item['61-90']);
+                const debt_over_90_val = parseNumber(item['>90']);
+                
+                total_weighted_days += (debt_1_30_val * 15) + (debt_31_60_val * 45) + (debt_61_90_val * 75) + (debt_over_90_val * 105);
+                total_debt_for_avg += debt_1_30_val + debt_31_60_val + debt_61_90_val + debt_over_90_val;
+            });
+            
+            const average_aging_days = total_debt_for_avg > 0 ? Math.round(total_weighted_days / total_debt_for_avg) : 0;
+
+            return {
+                total_debt,
+                future_debt,
+                overdue_debt,
+                average_aging_days,
+                customer_count,
+                debt_1_30,
+                debt_31_60,
+                debt_61_90
+            };
+        };
+
+        const get_top_debtors = (data, limit = 10) => {
+            if (!data || data.length === 0) return [];
+            
+            return data
+                .map(item => ({
+                    name: item['תאור חשבון'],
+                    account: item['חשבון'],
+                    debt: parseNumber(item['סה\'כ'])
+                }))
+                .filter(item => item.debt > 0)
+                .sort((a, b) => b.debt - a.debt)
+                .slice(0, limit);
+        };
+
+        // Navigation Component
+        const Navigation = ({ current_page, set_current_page }) => {
+            return (
+                <nav className="bg-white shadow-sm border-b">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        <div className="flex justify-between items-center h-16">
+                            <div className="flex items-center">
+                                <h1 className="text-xl font-bold text-gray-900">לוח בקרה דוחות גיל חוב</h1>
+                            </div>
+                            <div className="flex space-x-4">
+                                <button
+                                    onClick={() => set_current_page('database')}
+                                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                                        current_page === 'database' 
+                                            ? 'bg-blue-100 text-blue-700' 
+                                            : 'text-gray-500 hover:text-gray-700'
+                                    }`}
+                                >
+                                    בסיס נתונים
+                                </button>
+                                <button
+                                    onClick={() => set_current_page('dashboard')}
+                                    className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                                        current_page === 'dashboard' 
+                                            ? 'bg-blue-100 text-blue-700' 
+                                            : 'text-gray-500 hover:text-gray-700'
+                                    }`}
+                                >
+                                    לוח בקרה
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </nav>
+            );
+        };
+
+        // KPI Card Component
+        const KPICard = ({ title, value, icon, type = 'default' }) => {
+            const card_classes = `kpi-card p-6 rounded-lg ${type === 'overdue' ? 'overdue' : type === 'current' ? 'current' : type === 'future' ? 'future' : ''}`;
+            
+            return (
+                <div className={card_classes}>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-medium text-white/80">{title}</p>
+                            <p className="text-2xl font-bold text-white number-display">{formatNumber(value)}</p>
+                        </div>
+                        <div className="text-white/80">
+                            {icon}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // File Upload Component
+        const FileUpload = ({ on_file_upload }) => {
+            const [is_dragging, set_is_dragging] = useState(false);
+            const [upload_status, set_upload_status] = useState('');
+
+            const handle_drag_over = (e) => {
+                e.preventDefault();
+                set_is_dragging(true);
+            };
+
+            const handle_drag_leave = (e) => {
+                e.preventDefault();
+                set_is_dragging(false);
+            };
+
+            const handle_drop = (e) => {
+                e.preventDefault();
+                set_is_dragging(false);
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handle_file_upload(files[0]);
+                }
+            };
+
+            const handle_file_upload = (file) => {
+                if (file.type !== 'application/json') {
+                    set_upload_status('שגיאה: יש להעלות קובץ JSON בלבד');
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        
+                        // Validate data structure
+                        if (!Array.isArray(data)) {
+                            throw new Error('הנתונים חייבים להיות מערך');
+                        }
+                        
+                        // Validate required fields
+                        const required_fields = ['חשבון', 'תאור חשבון', 'סה\'כ', 'חוב עתידי', '>90', '61-90', '31-60', '1-30'];
+                        const first_item = data[0];
+                        
+                        if (!first_item || !required_fields.every(field => field in first_item)) {
+                            throw new Error('הנתונים חסרים שדות נדרשים');
+                        }
+                        
+                        // Store data and notify parent
+                        localStorage.setItem('customer_data', JSON.stringify(data));
+                        on_file_upload(data);
+                        set_upload_status('הקובץ הועלה בהצלחה!');
+                        
+                    } catch (error) {
+                        set_upload_status(`שגיאה: ${error.message}`);
+                    }
+                };
+                
+                reader.readAsText(file);
+            };
+
+            return (
+                <div className="max-w-2xl mx-auto">
+                    <div 
+                        className={`upload-area p-8 text-center ${is_dragging ? 'dragover' : ''}`}
+                        onDragOver={handle_drag_over}
+                        onDragLeave={handle_drag_leave}
+                        onDrop={handle_drop}
+                    >
+                        <div className="text-4xl mb-4">📁</div>
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">העלאת קובץ נתונים</h3>
+                        <p className="text-gray-600 mb-4">גרור קובץ JSON לכאן או לחץ לבחירת קובץ</p>
+                        
+                        <input
+                            type="file"
+                            accept=".json"
+                            onChange={(e) => {
+                                if (e.target.files[0]) {
+                                    handle_file_upload(e.target.files[0]);
+                                }
+                            }}
+                            className="hidden"
+                            id="file-upload"
+                        />
+                        
+                        <label
+                            htmlFor="file-upload"
+                            className="bg-blue-500 text-white px-6 py-2 rounded-md hover:bg-blue-600 cursor-pointer inline-block transition-colors"
+                        >
+                            בחר קובץ
+                        </label>
+                        
+                        {upload_status && (
+                            <div className={`mt-4 p-2 rounded ${upload_status.includes('שגיאה') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                                {upload_status}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Chart Components
+        const AgingDistributionChart = ({ kpis }) => {
+            const chart_ref = React.useRef(null);
+            const chart_instance = React.useRef(null);
+
+            useEffect(() => {
+                if (chart_ref.current) {
+                    const ctx = chart_ref.current.getContext('2d');
+                    
+                    // Destroy existing chart if it exists
+                    if (chart_instance.current) {
+                        chart_instance.current.destroy();
+                    }
+
+                    chart_instance.current = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['1-30 יום', '31-60 יום', '61-90 יום', 'מעל 90 יום'],
+                            datasets: [{
+                                label: 'סכום חוב',
+                                data: [kpis.debt_1_30, kpis.debt_31_60, kpis.debt_61_90, kpis.overdue_debt],
+                                backgroundColor: [
+                                    'rgba(34, 197, 94, 0.8)',
+                                    'rgba(251, 191, 36, 0.8)',
+                                    'rgba(249, 115, 22, 0.8)',
+                                    'rgba(239, 68, 68, 0.8)'
+                                ],
+                                borderColor: [
+                                    'rgba(34, 197, 94, 1)',
+                                    'rgba(251, 191, 36, 1)',
+                                    'rgba(249, 115, 22, 1)',
+                                    'rgba(239, 68, 68, 1)'
+                                ],
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    display: false
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (context) => {
+                                            return `${formatNumber(context.parsed.y)} ₪`;
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        callback: (value) => formatNumber(value) + ' ₪'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chart_instance.current) {
+                        chart_instance.current.destroy();
+                    }
+                };
+            }, [kpis]);
+
+            return <canvas ref={chart_ref} />;
+        };
+
+        const AgingBreakdownChart = ({ kpis }) => {
+            const chart_ref = React.useRef(null);
+            const chart_instance = React.useRef(null);
+
+            useEffect(() => {
+                if (chart_ref.current) {
+                    const ctx = chart_ref.current.getContext('2d');
+                    
+                    // Destroy existing chart if it exists
+                    if (chart_instance.current) {
+                        chart_instance.current.destroy();
+                    }
+
+                    const total_aging_debt = kpis.debt_1_30 + kpis.debt_31_60 + kpis.debt_61_90 + kpis.overdue_debt;
+                    
+                    chart_instance.current = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['1-30 יום', '31-60 יום', '61-90 יום', 'מעל 90 יום', 'חוב עתידי'],
+                            datasets: [{
+                                data: [kpis.debt_1_30, kpis.debt_31_60, kpis.debt_61_90, kpis.overdue_debt, kpis.future_debt],
+                                backgroundColor: [
+                                    'rgba(34, 197, 94, 0.8)',
+                                    'rgba(251, 191, 36, 0.8)',
+                                    'rgba(249, 115, 22, 0.8)',
+                                    'rgba(239, 68, 68, 0.8)',
+                                    'rgba(59, 130, 246, 0.8)'
+                                ]
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'bottom',
+                                    labels: {
+                                        usePointStyle: true,
+                                        padding: 20
+                                    }
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (context) => {
+                                            const label = context.label || '';
+                                            const value = context.parsed;
+                                            const percentage = total_aging_debt > 0 ? ((value / kpis.total_debt) * 100).toFixed(1) : 0;
+                                            return `${label}: ${formatNumber(value)} ₪ (${percentage}%)`;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chart_instance.current) {
+                        chart_instance.current.destroy();
+                    }
+                };
+            }, [kpis]);
+
+            return <canvas ref={chart_ref} />;
+        };
+
+        const TopDebtorsChart = ({ top_debtors }) => {
+            const chart_ref = React.useRef(null);
+            const chart_instance = React.useRef(null);
+
+            useEffect(() => {
+                if (chart_ref.current && top_debtors.length > 0) {
+                    const ctx = chart_ref.current.getContext('2d');
+                    
+                    // Destroy existing chart if it exists
+                    if (chart_instance.current) {
+                        chart_instance.current.destroy();
+                    }
+
+                    const top_5_debtors = top_debtors.slice(0, 5);
+                    
+                    chart_instance.current = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: top_5_debtors.map(d => d.name.length > 20 ? d.name.substring(0, 20) + '...' : d.name),
+                            datasets: [{
+                                label: 'חוב',
+                                data: top_5_debtors.map(d => d.debt),
+                                backgroundColor: 'rgba(99, 102, 241, 0.8)',
+                                borderColor: 'rgba(99, 102, 241, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            indexAxis: 'y',
+                            plugins: {
+                                legend: {
+                                    display: false
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (context) => {
+                                            return `${formatNumber(context.parsed.x)} ₪`;
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        callback: (value) => formatNumber(value) + ' ₪'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chart_instance.current) {
+                        chart_instance.current.destroy();
+                    }
+                };
+            }, [top_debtors]);
+
+            return <canvas ref={chart_ref} />;
+        };
+
+        // Main App Component
+        const App = () => {
+            const [current_page, set_current_page] = useState('database');
+            const [customer_data, set_customer_data] = useState([]);
+
+            // Load data from localStorage on component mount
+            useEffect(() => {
+                const stored_data = localStorage.getItem('customer_data');
+                if (stored_data) {
+                    try {
+                        const parsed_data = JSON.parse(stored_data);
+                        set_customer_data(parsed_data);
+                    } catch (error) {
+                        console.error('Error parsing stored data:', error);
+                    }
+                }
+            }, []);
+
+            // Calculate KPIs
+            const kpis = useMemo(() => calculate_kpis(customer_data), [customer_data]);
+            const top_debtors = useMemo(() => get_top_debtors(customer_data), [customer_data]);
+
+            const handle_file_upload = (data) => {
+                set_customer_data(data);
+                set_current_page('dashboard');
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <Navigation current_page={current_page} set_current_page={set_current_page} />
+                    
+                    <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                        {current_page === 'database' && (
+                            <div className="px-4 py-6 sm:px-0">
+                                <div className="border-4 border-dashed border-gray-200 rounded-lg p-8">
+                                    <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">בסיס נתונים</h2>
+                                    <FileUpload on_file_upload={handle_file_upload} />
+                                    
+                                    {customer_data.length > 0 && (
+                                        <div className="mt-8">
+                                            <h3 className="text-lg font-medium text-gray-900 mb-4">תצוגה מקדימה של הנתונים</h3>
+                                            <div className="bg-white shadow overflow-hidden sm:rounded-md">
+                                                <div className="overflow-x-auto">
+                                                    <table className="min-w-full divide-y divide-gray-200">
+                                                        <thead className="bg-gray-50">
+                                                            <tr>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">חשבון</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">תאור חשבון</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">סה"כ</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">חוב עתידי</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">>90</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">61-90</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">31-60</th>
+                                                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">1-30</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="bg-white divide-y divide-gray-200">
+                                                            {customer_data.slice(0, 10).map((item, index) => (
+                                                                <tr key={index}>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{item.חשבון}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{item['תאור חשבון']}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 number-display">{formatNumber(item['סה\'כ'])}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 number-display">{formatNumber(item['חוב עתידי'])}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 number-display">{formatNumber(item['>90'])}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 number-display">{formatNumber(item['61-90'])}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 number-display">{formatNumber(item['31-60'])}</td>
+                                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 number-display">{formatNumber(item['1-30'])}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                {customer_data.length > 10 && (
+                                                    <div className="bg-gray-50 px-6 py-3 text-sm text-gray-500">
+                                                        מציג 10 מתוך {customer_data.length} רשומות
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {current_page === 'dashboard' && (
+                            <div className="px-4 py-6 sm:px-0">
+                                {customer_data.length === 0 ? (
+                                    <div className="text-center py-12">
+                                        <div className="text-4xl mb-4">📊</div>
+                                        <h3 className="text-lg font-medium text-gray-900 mb-2">אין נתונים להצגה</h3>
+                                        <p className="text-gray-600">יש להעלות קובץ נתונים תחילה</p>
+                                        <button
+                                            onClick={() => set_current_page('database')}
+                                            className="mt-4 bg-blue-500 text-white px-6 py-2 rounded-md hover:bg-blue-600 transition-colors"
+                                        >
+                                            העלאת נתונים
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <h2 className="text-2xl font-bold text-gray-900 mb-6">לוח בקרה - ניתוח גיל חוב</h2>
+                                        
+                                        {/* KPI Cards */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                                            <KPICard
+                                                title="סה&quot;כ חוב בש&quot;ח"
+                                                value={kpis.total_debt}
+                                                icon={<div>💰</div>}
+                                            />
+                                            <KPICard
+                                                title="חוב עתידי"
+                                                value={kpis.future_debt}
+                                                icon={<div>📈</div>}
+                                                type="future"
+                                            />
+                                            <KPICard
+                                                title="חוב פג תוקף"
+                                                value={kpis.overdue_debt}
+                                                icon={<div>⚠️</div>}
+                                                type="overdue"
+                                            />
+                                            <KPICard
+                                                title="ממוצע ימי חוב"
+                                                value={kpis.average_aging_days}
+                                                icon={<div>📅</div>}
+                                            />
+                                            <KPICard
+                                                title="מספר לקוחות"
+                                                value={kpis.customer_count}
+                                                icon={<div>👥</div>}
+                                            />
+                                            <KPICard
+                                                title="חוב 1-30 יום"
+                                                value={kpis.debt_1_30}
+                                                icon={<div>🟢</div>}
+                                                type="current"
+                                            />
+                                            <KPICard
+                                                title="חוב 31-60 יום"
+                                                value={kpis.debt_31_60}
+                                                icon={<div>🟡</div>}
+                                            />
+                                            <KPICard
+                                                title="חוב 61-90 יום"
+                                                value={kpis.debt_61_90}
+                                                icon={<div>🟠</div>}
+                                            />
+                                        </div>
+                                        
+                                        {/* Top Debtors */}
+                                        <div className="bg-white shadow rounded-lg p-6 mb-8">
+                                            <h3 className="text-lg font-medium text-gray-900 mb-4">חייבים מובילים</h3>
+                                            <div className="space-y-3">
+                                                {top_debtors.map((debtor, index) => (
+                                                    <div key={index} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                                                        <div>
+                                                            <div className="font-medium text-gray-900">{debtor.name}</div>
+                                                            <div className="text-sm text-gray-500">חשבון: {debtor.account}</div>
+                                                        </div>
+                                                        <div className="text-lg font-bold text-red-600 number-display">
+                                                            {formatNumber(debtor.debt)} ₪
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        
+                                        {/* Charts Section */}
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                                            {/* Aging Distribution Chart */}
+                                            <div className="bg-white shadow rounded-lg p-6">
+                                                <h3 className="text-lg font-medium text-gray-900 mb-4">פילוח חוב לפי תקופות</h3>
+                                                <div className="h-64 chart-container">
+                                                    <AgingDistributionChart kpis={kpis} />
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Aging Breakdown Pie Chart */}
+                                            <div className="bg-white shadow rounded-lg p-6">
+                                                <h3 className="text-lg font-medium text-gray-900 mb-4">התפלגות החוב</h3>
+                                                <div className="h-64 chart-container">
+                                                    <AgingBreakdownChart kpis={kpis} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        {/* Top Debtors Chart */}
+                                        <div className="bg-white shadow rounded-lg p-6">
+                                            <h3 className="text-lg font-medium text-gray-900 mb-4">5 החייבים הגדולים ביותר</h3>
+                                            <div className="h-64 chart-container">
+                                                <TopDebtorsChart top_debtors={top_debtors} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        // Render the App
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
